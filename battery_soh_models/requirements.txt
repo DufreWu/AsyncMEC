@@ -1,0 +1,10 @@
+tensorflow[and-cuda]
+tensorboard
+scikit-learn
+keras
+scipy
+matplotlib
+tqdm==4.66.5
+pandas
+matplotlib-inline
+notebook

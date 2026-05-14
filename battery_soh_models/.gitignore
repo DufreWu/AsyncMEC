@@ -1,0 +1,11 @@
+DATA/
+**/.ipynb_checkpoints
+**/__pycache__
+**/exp-*
+**/*.asv
+*.out
+data
+data_pkl
+exps
+**/venv
+**/.venv

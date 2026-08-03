@@ -1,0 +1,22 @@
+control_period: 1.0
+
+phases:
+  - name: low
+    duration: 20
+    objects: 2
+
+  - name: medium
+    duration: 20
+    objects: 6
+
+  - name: high
+    duration: 20
+    objects: 12
+
+  - name: medium
+    duration: 20
+    objects: 6
+
+  - name: low
+    duration: 20
+    objects: 2

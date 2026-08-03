@@ -1,7 +1,34 @@
+import os
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from cross_attention import CrossAttention
+from tensorflow import keras
+import joblib
+
+# ============================================================
+# Device
+# ============================================================
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+class CrossAttention(nn.Module):
+    def __init__(self, embed_dim, num_heads=4, dropout=0.1):
+        super().__init__()
+
+        self.attn = nn.MultiheadAttention(embed_dim, num_heads, dropout)
+
+    def forward(self, q, kv):
+        """
+        q: [batch_size, seq_len_q, embed_dim]
+        kv: [batch_size, seq_len_kv, embed_dim]
+        """
+
+        out, attn = self.attn(
+            query=q, 
+            key=kv,
+            value=kv
+        )
+
+        return out, attn
 
 # ============================================================
 # Robot State Encoder
@@ -9,6 +36,7 @@ from cross_attention import CrossAttention
 class RobotStateEncoder(nn.Module):
     def __init__(self, state_dim, hidden_dim):
         super().__init__()
+
         self.net = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
             nn.ReLU(),
@@ -16,12 +44,10 @@ class RobotStateEncoder(nn.Module):
         )
 
     def forward(self, state):
-        # s: [B, state_dim]
-        return self.net(state)  # [B, hidden_dim]
+        return self.net(state)
 
 # ============================================================
 # Feature Adapter
-# battery health feature -> controller hidden dimension
 # ============================================================
 class FeatureAdapter(nn.Module):
     def __init__(self, adapter_dim, hidden_dim):
@@ -34,8 +60,7 @@ class FeatureAdapter(nn.Module):
         )
 
     def forward(self, x):
-        # x: [B, adapter_dim]
-        return self.adapter(x)  # [B, hidden_dim]
+        return self.adapter(x)
 
 # ============================================================
 # Adaptive Gate
@@ -52,7 +77,9 @@ class AdaptiveGatingBlock(nn.Module):
         )
 
     def forward(self, self_out, cross_out):
+
         alpha = self.gate(cross_out)
+
         fused = (
             alpha * cross_out
             + (1 - alpha) * self_out
@@ -65,7 +92,7 @@ class AdaptiveGatingBlock(nn.Module):
 # ============================================================
 class FeedForwardNet(nn.Module):
     def __init__(self, embed_dim, ff_dim, dropout=0.1):
-        super(FeedForwardNet, self).__init__()
+        super().__init__()
 
         self.net = nn.Sequential(
             nn.Linear(embed_dim, ff_dim),
@@ -73,8 +100,8 @@ class FeedForwardNet(nn.Module):
             nn.Dropout(dropout),
             nn.Linear(ff_dim, embed_dim)
         )
-    
-    def forward(self, x): 
+
+    def forward(self, x):
         return self.net(x)
 
 # ============================================================
@@ -84,10 +111,26 @@ class DecoderBlock(nn.Module):
     def __init__(self, embed_dim, num_heads, ffn_dim=128, dropout=0.1):
         super().__init__()
 
-        self.self_attn = nn.MultiheadAttention(embed_dim, num_heads, dropout, batch_first=True)
-        self.cross_attn = CrossAttention(embed_dim, num_heads, dropout)
+        self.self_attn = nn.MultiheadAttention(
+            embed_dim,
+            num_heads,
+            dropout,
+            batch_first=True
+        )
+
+        self.cross_attn = CrossAttention(
+            embed_dim,
+            num_heads,
+            dropout
+        )
+
         self.gate = AdaptiveGatingBlock(embed_dim)
-        self.ffn = FeedForwardNet(embed_dim, ffn_dim, dropout)
+
+        self.ffn = FeedForwardNet(
+            embed_dim,
+            ffn_dim,
+            dropout
+        )
 
         self.norm1 = nn.LayerNorm(embed_dim)
         self.norm2 = nn.LayerNorm(embed_dim)
@@ -96,29 +139,44 @@ class DecoderBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, s, h_hat):
-        """
-        s:              [batch, 1, embed_dim], 
-        h_hat:          [batch, 32, embed_dim]
-        """
 
+        # ------------------------------------
+        # Self attention
+        # ------------------------------------
         self_out, _ = self.self_attn(s, s, s)
+
         s1 = self.norm1(s + self.dropout(self_out))
 
+        # ------------------------------------
+        # Cross attention
+        # ------------------------------------
         cross_out, _ = self.cross_attn(q=s1, kv=h_hat)
+
+        # ------------------------------------
+        # Adaptive gating
+        # ------------------------------------
         gated = self.gate(self_out, cross_out)
 
         s2 = self.norm2(s1 + self.dropout(gated))
+
+        # ------------------------------------
+        # FFN
+        # ------------------------------------
         ff = self.ffn(s2)
+
         s3 = self.norm3(s2 + self.dropout(ff))
 
         return s3
 
-
+# ============================================================
+# Multi-scale Controller
+# ============================================================
 class EnergyEfficientMultiScaleController(nn.Module):
+
     def __init__(
         self,
         state_dim,
-        adapter_dim,
+        adapter_dim=256,
         hidden_dim=128,
         n_heads=4,
         num_decoder_layers=2,
@@ -126,15 +184,27 @@ class EnergyEfficientMultiScaleController(nn.Module):
     ):
         super().__init__()
 
+        # ------------------------------------
+        # Robot state encoder
+        # ------------------------------------
         self.state_enc = RobotStateEncoder(state_dim, hidden_dim)
 
+        # ------------------------------------
+        # Battery health adapter
+        # ------------------------------------
+        self.feature_adapter = FeatureAdapter(adapter_dim, hidden_dim)
+
+        # ------------------------------------
+        # Decoder stack
+        # ------------------------------------
         self.decoders = nn.ModuleList([
             DecoderBlock(hidden_dim, n_heads)
             for _ in range(num_decoder_layers)
         ])
 
-        self.feature_adapter = FeatureAdapter(adapter_dim, hidden_dim)
-
+        # ------------------------------------
+        # Policy head
+        # ------------------------------------
         self.policy = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
@@ -142,85 +212,106 @@ class EnergyEfficientMultiScaleController(nn.Module):
         )
 
     def forward(self, state, health_feature):
-        """
-        state:          [B, state_dim]      (high-frequency)
-        health_feature: [B, adapter_dim]    (cached, low-frequency)
-        """
+        # ------------------------------------
+        # Encode robot state
+        # ------------------------------------
+        s_local = self.state_enc(state)
 
-        # ---- encode state ----
-        s_local = self.state_enc(state)      # [B, D]
-        q = s_local.unsqueeze(1)             # [B, 1, D]
+        q = s_local.unsqueeze(1)
 
-        # ---- feature adapter ----
+        # ------------------------------------
+        # Adapt health feature
+        # ------------------------------------
         h_hat = self.feature_adapter(health_feature)
+
         h_hat = h_hat.unsqueeze(1)
 
-        # ---- transformer decoding ----
+        # ------------------------------------
+        # Multi-scale decoding
+        # ------------------------------------
         for dec in self.decoders:
             q = dec(q, h_hat)
 
         h = q.squeeze(1)
 
-        # ---- action ----
+        # ------------------------------------
+        # Policy
+        # ------------------------------------
         action = self.policy(h)
 
         return action
 
 
-# -------------------------
-# Instantiate controller
-# -------------------------
-state_dim = 6        # example: battery_soc, soh, speed, cpu, gpu, temp
-adapter_dim = 128    # must match health energy adapter
-action_dim = 3       # e.g., linear_vel, angular_vel, dvfs
+# =====================================================
+# Example
+# =====================================================
+import yaml
+import torch
+import numpy as np
 
-controller = EnergyEfficientMultiScaleController(
-    state_dim=state_dim,        
-    adapter_dim=adapter_dim,
-    action_dim=action_dim        
-).cuda().half()
+from robot_env import RobotEnv
 
-controller.eval()
+# =====================================================
+# Load configuration
+# =====================================================
+with open("./configs/robot.yaml", "r") as f:
+    cfg = yaml.safe_load(f)
 
-# cached health feature (1–5 Hz)
-cached_energy_adapter = torch.tensor(
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+# =====================================================
+# Create environment
+# =====================================================
+env = RobotEnv(cfg, is_sim=True)
+
+# or
+# env.battery.set_initial_soh(0.8)
+
+# =====================================================
+# Build model
+# =====================================================
+model = EnergyEfficientMultiScaleController(
+    state_dim=cfg["controller"]["state_dim"],
+    adapter_dim=32,
+    action_dim=cfg["controller"]["action_dim"],
+).to(device)
+
+model.eval()
+
+# --------------------------------------
+# Robot state
+# --------------------------------------
+robot_state = torch.tensor(
     [[
-        0.12, -0.08, 0.31, -0.22, 0.05, 0.18, -0.11, 0.09,
-        0.27, -0.14, 0.06, 0.21, -0.19, 0.02, 0.15, -0.07,
-        # ... (repeat until 128 values total)
+        12.3,      # mechanical power
+        7.8,       # computation power
+        0.8,       # speed
+        30.0,      # FPS
+        0.9,       # QoS
+        1.0        # complexity 
     ]],
-    device="cuda",
-    dtype=torch.float16
+    dtype=torch.float32,
+    device=device,
 )
 
-# If you want a quick synthetic placeholder instead:
-cached_energy_adapter = torch.randn(
-    1, 128,
-    device="cuda",
-    dtype=torch.float16
+health_feature = torch.randn (
+    1,
+    cfg["battery"]["encoder_dim"],
+    device=device,
 )
 
-# current robot state at time t (100 Hz)
-current_robot_state = torch.tensor(
-    [[
-        0.23,   # battery_soc   (23%)
-        0.93,   # battery_soh   (healthy)
-        0.80,   # speed         (fast)
-        0.71,   # cpu_util
-        0.65,   # gpu_util
-        0.75    # temperature   (normalized, e.g. 75°C / 100)
-    ]],
-    device="cuda",
-    dtype=torch.float16
-)  # shape: [1, 6]
-
-
-# high-frequency loop (e.g. 100 Hz)
 with torch.no_grad():
-    action = controller(
-        state=current_robot_state,   # [1, state_dim]
-        health_feature=cached_energy_adapter,
+    action = model(
+        state = robot_state,
+        health_feature = health_feature,
     )
 
-print("Action:", action)
-# send_to_robot(action)
+print("=" * 50)
+print("Action shape :", action.shape)
+print("Action value :")
+print(action.cpu().numpy())
+print("=" * 50)
+
+assert action.shape == (1, 3)
+
+print("✓ Forward pass successful.")

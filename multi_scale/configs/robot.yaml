@@ -1,0 +1,44 @@
+motor:
+  v_min: 0.5
+  v_max: 5.0
+  v_step: 0.5
+
+battery:
+  feature_period: 50.0
+  window_size: 60
+  window_step: 50
+  encoder_dim: 32
+  encoder_path: "./checkpoints/battery_models/encoder/battery_health_feature.onnx"
+  encoder_x0_scaler: "./checkpoints/battery_models/encoder/x0_scaler.pkl"
+  encoder_x1_scaler: "./checkpoints/battery_models/encoder/x1_scaler.pkl"
+  encoder_x2_scaler: "./checkpoints/battery_models/encoder/x2_scaler.pkl"
+  encoder_y_scaler: "./checkpoints/battery_models/encoder/y_scaler.pkl"
+
+  dcap_path: "./checkpoints/battery_models/dcap/battery_dcap.onnx"
+  dcap_x0_scaler: "./checkpoints/battery_models/dcap/x0_scaler.pkl"
+  dcap_x1_scaler: "./checkpoints/battery_models/dcap/x1_scaler.pkl"
+  dcap_x2_scaler: "./checkpoints/battery_models/dcap/x2_scaler.pkl"
+  dcap_y_scaler: "./checkpoints/battery_models/dcap/y_scaler.pkl"
+
+jetson_orin_nx_16g:
+  cpu_cores_num: 8
+  cpu_path: "/sys/devices/system/cpu"
+  gpu_path: "/sys/devices/platform/17000000.gpu/devfreq/17000000.gpu"
+  mem_path: "/sys/kernel/debug/bpmp/debug/clk/emc"
+  emc_cap_path: "/sys/kernel/nvpmodel_clk_cap/emc"
+
+# 268800, 422400, 576000, 729600, 883200, 1036800,
+  cpu_freqs: [422400, 576000, 729600, 883200, 1036800, 1190400, 1344000, 1497600, 1651200, 1804800, 1958400, 1984000]
+  gpu_freqs: [306000000, 408000000, 510000000, 612000000, 714000000, 816000000, 918000000]
+  mem_freqs: [204000000, 665600000, 1600000000, 2133000000, 2750000000, 3199000000]
+  max_mem_freq: "3199000000"
+
+  ina_path: "/sys/bus/i2c/drivers/ina3221/1-0040/hwmon/hwmon3"
+
+controller:
+  state_dim: 6
+  action_dim: 3
+  health_feature_dim: 32
+
+  max_mech_power: 20
+  max_comp_power: 10

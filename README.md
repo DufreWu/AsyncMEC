@@ -5,6 +5,7 @@ This repository contains the source code for AsyncMEC, an asynchronous multi-sca
 AsyncMEC/
 ├── battery_model/      # Battery health modeling and feature extraction
 ├── multi_scale/        # Asynchronous multi-scale runtime controller
+├── ros2_isaacsim_env/  # Simulator
 └── README.md
 ```
 

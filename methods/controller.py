@@ -25,7 +25,7 @@ class MaxPerformanceController(RuntimeController):
         return {
             "cpu_freq": max(self.robot.board.cpu_freqs),
             "gpu_freq": max(self.robot.board.gpu_freqs),
-            "speed": 2.0
+            "speed": 2.5
         }
 
 

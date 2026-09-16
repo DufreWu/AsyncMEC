@@ -104,9 +104,9 @@ def find_best_action(target_fps, complexity_value):
         "cost": cost
     }
 
-from multi_scale_control import EnergyEfficientMultiScaleController
-from robot_env import RobotEnv
-from yolo_manager import YOLOManager
+from methods.multi_scale_control import EnergyEfficientMultiScaleController
+from envs.robot_env import RobotEnv
+from appls.yolo_manager import YOLOManager
 
 # ==========================================
 # Load configs

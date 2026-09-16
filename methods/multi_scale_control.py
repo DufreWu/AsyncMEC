@@ -176,7 +176,7 @@ class EnergyEfficientMultiScaleController(nn.Module):
     def __init__(
         self,
         state_dim,
-        adapter_dim=256,
+        adapter_dim=32,
         hidden_dim=128,
         n_heads=4,
         num_decoder_layers=2,

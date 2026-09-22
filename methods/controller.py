@@ -1,10 +1,12 @@
-import yaml
-import torch
-import joblib
-import os
-import numpy as np
-from tensorflow import keras
-from robot_env import RobotEnv
+from __future__ import annotations
+
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from multi_scale.envs.robot_env import RobotEnv
+
+MULTI_SCALE_ROOT = Path(__file__).resolve().parents[1]
 
 
 # =========================================================
@@ -195,7 +197,6 @@ class LongTermBatteryAwareController:
 
         return self.action
 
-from rrl_control import DQNController
 class RRLController(RuntimeController):
     def __init__(
         self,
@@ -203,16 +204,24 @@ class RRLController(RuntimeController):
         device="cpu"
     ):
         self.device = device
+        if __package__:
+            from .rl_control import DQNController
+        else:
+            from rl_control import DQNController
         self.model = DQNController(robot)
-        self.model.agent.load("./checkpoints/rrl_model.pt")
+        self.model.agent.load(str(MULTI_SCALE_ROOT / "checkpoints/rrl_model.pt"))
     
     def step(self, yolo_data):
         return self.model.step(yolo_data)
 
-from multi_scale_control import EnergyEfficientMultiScaleController
 class MultiScaleController(RuntimeController):
 
-    def __init__(self, robot: RobotEnv, device="cpu"):
+    def __init__(self, robot: RobotEnv, device="cpu", checkpoint_path=None):
+        import torch
+        if __package__:
+            from .multi_scale_control import EnergyEfficientMultiScaleController
+        else:
+            from multi_scale_control import EnergyEfficientMultiScaleController
         self.device = device
         self.robot = robot
 
@@ -227,9 +236,7 @@ class MultiScaleController(RuntimeController):
             ).to(device)
         )
 
-        checkpoint_path = (
-            "./checkpoints/multi_scale_model.pt"
-        )
+        checkpoint_path = checkpoint_path or MULTI_SCALE_ROOT / "checkpoints/multi_scale_model.pt"
 
         self.model.load_state_dict(
             torch.load(
@@ -246,6 +253,8 @@ class MultiScaleController(RuntimeController):
     # Runtime step
     # ========================================================
     def step(self, yolo_data):
+        import numpy as np
+        import torch
 
         # ----------------------------------------------------
         # Build runtime robot state
@@ -314,11 +323,12 @@ class MultiScaleController(RuntimeController):
 # Example
 # =========================================================
 
-with open("./configs/robot.yaml", "r") as f:
-    cfg = yaml.safe_load(f)
-
-from robot_env import RobotEnv
 if __name__ == "__main__":
+    import yaml
+    from robot_env import RobotEnv
+
+    with open(MULTI_SCALE_ROOT / "configs/robot.yaml") as f:
+        cfg = yaml.safe_load(f)
     robot = RobotEnv(cfg, is_sim=True)
 
     warm_action = {

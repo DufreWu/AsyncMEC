@@ -1,160 +1,48 @@
-# Native Isaac Sim 6 — Leatherback + ROS 2 + YOLO
+# ROS 2 + Isaac Sim Environment
 
-This package runs directly in **NVIDIA Isaac Sim 6**. It does **not** require Isaac Lab.
+This directory contains the host-side Isaac Sim setup used for the AsyncMEC hardware-in-the-loop (HIL) and simulation workflows. It provides the ROS 2 bridge between the simulated robot environment and the controller/runtime stack used in the project.
 
-## Included features
+## Overview
 
-- Native NVIDIA Leatherback USD.
-- Random static-tree scenes:
-  - Low: 0–5 trees
-  - Medium: 6–9 trees
-  - High: 10–15 trees
-  - configurable static people with `--num-people N`
-  - exact count with `--num-obstacles N`
-- Green goal marker.
-- Autonomous goal following.
-- Reactive tree and person avoidance.
-- Native Isaac Sim 6 Ackermann steering/wheel controller.
-- Leatherback-mounted RTX camera.
-- RGB and optional depth rendering.
-- ROS 2 publishing:
-  - `/leatherback/front_camera/rgb`
-  - `/leatherback/front_camera/depth`
-  - `/leatherback/front_camera/camera_info`
-- ROS 2 control subscription:
-  - `/leatherback/cmd_vel`
-- Jetson Orin NX YOLO/YOLO-World ROS 2 node.
-- YOLO detections, annotated image, and inference FPS topics.
-- Fast DDS configuration for laptop ↔ Jetson communication.
+The simulation launcher scripts in this folder start Isaac Sim with the appropriate scene complexity and ROS topics for AsyncMEC experiments:
 
-## 1. Fastest first test — no ROS
+- `launch_fixed_complexity.sh`: runs a single fixed scene complexity across the route.
+- `launch_vary_complexity.sh`: launches the variable-complexity demo flow using the planned path and cruise speed commands.
 
-Run from your **Isaac Sim 6 installation root**, where `python.sh` exists:
+These scripts are designed to work with ROS 2 and Isaac Sim 6, and they source the ROS 2 environment automatically from `/opt/ros/${ROS_DISTRO}/setup.bash` (defaulting to `jazzy`).
+
+## Prerequisites
+
+Before running the simulation, make sure the following are already set up:
+
+- Ubuntu with ROS 2 installed
+- Isaac Sim 6 or a compatible Isaac Sim release
+- A Python environment that can launch the simulator scripts
+- ROS 2 workspace sourced in the terminal session
+
+## Quick Start
 
 ```bash
-cd /path/to/isaac-sim
+cd ros2_isaacsim_env
 
-./python.sh /path/to/leatherback_yolo_ros2_isaacsim6_native/simulator/leatherback_yolo_ros2_demo.py \
-  --complexity medium \
-  --control-mode auto \
-  --camera-width 640 \
-  --camera-height 480 \
-  --camera-fps 15 \
-  --no-ros
+# Fixed scene complexity: low, medium, or high
+./simulator/launch_fixed_complexity.sh [low|medium|high]
+
+# Variable-complexity demo
+./simulator/launch_vary_complexity.sh
 ```
 
-You should see Isaac Sim open, the Leatherback spawn, randomized static trees
-and people appear, and a green goal at x=+8 m.
-
-## 2. Short launcher
-
-Set your Isaac Sim root once:
+## Common Usage Examples
 
 ```bash
-export ISAAC_SIM_ROOT=/path/to/isaac-sim
+# Pass simulator options directly
+./simulator/launch_fixed_complexity.sh --complexity [low|medium|high] --headless
 ```
 
-Then from this package:
+## Notes
 
-```bash
-./run_sim.sh --complexity medium --control-mode auto --no-ros
-```
+- The default ROS domain is `20` and can be overridden with `ROS_DOMAIN_ID`.
+- The default ROS middleware is `rmw_fastrtps_cpp` and can be overridden with `RMW_IMPLEMENTATION`.
+- The simulator scripts expect the Isaac Sim Python entrypoint to be available through the default `python` interpreter, or through the `ISAAC_PYTHON` environment variable.
 
-## 3. Run with ROS 2
-
-Source your ROS 2 environment **before starting Isaac Sim**. Example with Jazzy:
-
-```bash
-source /opt/ros/jazzy/setup.bash
-export ROS_DOMAIN_ID=42
-export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
-```
-
-Then:
-
-```bash
-cd /path/to/isaac-sim
-
-./python.sh /path/to/leatherback_yolo_ros2_isaacsim6_native/simulator/leatherback_yolo_ros2_demo.py \
-  --complexity medium \
-  --control-mode auto \
-  --camera-width 640 \
-  --camera-height 480 \
-  --camera-fps 15
-```
-
-Check topics from another ROS terminal:
-
-```bash
-ros2 topic list | grep leatherback
-ros2 topic hz /leatherback/front_camera/rgb
-```
-
-## 4. Run Jetson YOLO
-
-On the Jetson:
-
-```bash
-source /opt/ros/$ROS_DISTRO/setup.bash
-export ROS_DOMAIN_ID=42
-
-python3 -m pip install -r jetson_ros2/requirements.txt
-
-python3 jetson_ros2/jetson_yolo_world_node.py \
-  --weights yolov8s-worldv2.pt \
-  --prompts cube,box,block \
-  --device 0 \
-  --half
-```
-
-Outputs:
-
-```text
-/leatherback/yolo/detections
-/leatherback/yolo/annotated
-/leatherback/yolo/fps
-```
-
-## 5. ROS control mode
-
-Start Isaac Sim with:
-
-```bash
-./run_sim.sh --complexity medium --control-mode ros
-```
-
-Then publish a command:
-
-```bash
-ros2 topic pub -r 10 /leatherback/cmd_vel geometry_msgs/msg/Twist \
-"{linear: {x: 0.6}, angular: {z: 0.12}}"
-```
-
-For this demo:
-
-- `linear.x` = desired forward speed in m/s.
-- `angular.z` = desired steering angle in radians.
-
-## Efficient settings
-
-For initial HIL / YOLO measurements use:
-
-```bash
-./run_sim.sh \
-  --complexity medium \
-  --control-mode auto \
-  --camera-width 640 \
-  --camera-height 480 \
-  --camera-fps 15 \
-  --disable-depth
-```
-
-This keeps the RGB workload needed by YOLO but avoids extra depth rendering/ROS traffic. Re-enable depth later when you want to estimate obstacle distance and close the perception-control loop.
-
-For maximum simulator throughput, add:
-
-```bash
---headless
-```
-
-See `TUTORIAL.md` for the full workflow and troubleshooting.
+For the full project setup and controller workflow, refer to the repository root README in the parent directory.

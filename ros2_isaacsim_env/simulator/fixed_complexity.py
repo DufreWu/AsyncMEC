@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AsyncMEC Flat Grid demo: Isaac Sim 6 PC-side HIL server.
+"""AsyncMEC fixed-complexity demo: Isaac Sim 6 PC-side HIL server.
 
 This is a standalone NVIDIA Isaac Sim 6 application. It does not depend on
 Isaac Lab. Run it with Isaac Sim's ``python.sh`` (or with the Python environment
@@ -8,9 +8,9 @@ of a pip-installed Isaac Sim 6).
 Features
 --------
 * NVIDIA Leatherback USD from the Isaac Sim asset server.
-* Lightweight Flat Grid scene with repeatable low/medium/high complexity zones.
+* Lightweight Flat Grid scene with one input complexity across the entire route.
 * Deterministic primitive boxes and NVIDIA tree/human USD assets.
-* Moving people in the high-complexity zone.
+* Moving people at high complexity.
 * ``hybrid`` mode: simulator route steering plus an AsyncMEC speed limit from Jetson.
 * Optional autonomous goal follower with reactive carton avoidance.
 * Native Isaac Sim 6 Ackermann controller for Leatherback steering/wheels.
@@ -42,14 +42,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--headless", action="store_true", help="Run Isaac Sim without the interactive GUI.")
     parser.add_argument("--scene", choices=("grid", "random"), default="grid")
-    parser.add_argument("--start-x", type=float, default=-12.0)
+    parser.add_argument("--start-x", type=float, default=-8.0)
     parser.add_argument("--start-y", type=float, default=0.0)
     parser.add_argument("--start-yaw-deg", type=float, default=0.0)
-    parser.add_argument("--goal-x", type=float, default=12.0)
+    parser.add_argument("--goal-x", type=float, default=8.0)
     parser.add_argument("--goal-y", type=float, default=0.0)
-    parser.add_argument("--complexity", choices=("low", "medium", "high", "random"), default="medium",
-                        help="Used by random mode; grid mode uses fixed low/medium/high zones.")
-    parser.add_argument("--num-obstacles", type=int, default=None, help="Exact object count; overrides --complexity.")
+    parser.add_argument("--complexity", choices=("low", "medium", "high"), default="medium",
+                        help="Fixed complexity for the entire run; grid counts: low=10, medium=20, high=30.")
+    parser.add_argument("--num-obstacles", type=int, default=None,
+                        help="Object count for --scene random only (clamped to 0–30).")
     parser.add_argument(
         "--person-usd", default=None,
         help="Human USD file/URL; defaults to Isaac Sim's male police officer asset.",
@@ -102,8 +103,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--goal-tolerance", type=float, default=0.90, help="Closed-loop waypoint switch radius [m].")
     parser.add_argument("--lookahead", type=float, default=3.0)
     parser.add_argument("--corridor-half-width", type=float, default=1.15)
-    parser.add_argument("--world-half-length", type=float, default=18.0)
-    parser.add_argument("--world-half-width", type=float, default=12.0)
+    parser.add_argument("--world-half-length", type=float, default=12.0)
+    parser.add_argument("--world-half-width", type=float, default=8.0)
     parser.add_argument("--disable-depth", action="store_true", help="Do not render or publish depth.")
     parser.add_argument("--no-ros", action="store_true", help="Do not load the Isaac Sim ROS 2 bridge.")
     parser.add_argument("--test-steps", type=int, default=0, help="Exit after N simulation steps; 0 runs continuously.")
@@ -169,16 +170,15 @@ START_XY = (float(ARGS.start_x), float(ARGS.start_y))
 GOAL_XY = (float(ARGS.goal_x), float(ARGS.goal_y))
 # Clockwise rounded-rectangle route. The final waypoint connects back to the
 # first one, so autonomous/hybrid operation can repeat indefinitely.
-# Expanded 1.5x in both axes to give each complexity zone more placement space.
 ROUTE_WAYPOINTS = (
     START_XY,
-    (-9.0, -5.4),
-    (0.0, -6.0),
-    (9.0, -5.4),
-    (12.0, 0.0),
-    (9.0, 5.4),
-    (0.0, 6.0),
-    (-9.0, 5.4),
+    (-6.0, -3.6),
+    (0.0, -4.0),
+    (6.0, -3.6),
+    (8.0, 0.0),
+    (6.0, 3.6),
+    (0.0, 4.0),
+    (-6.0, 3.6),
 )
 
 # The same physical joints used in the user's previous Leatherback environment.
@@ -232,18 +232,18 @@ class DemoZone:
     color: tuple[float, float, float]
 
 
-DEMO_ZONES = (
-    DemoZone("low", 0.00, 0.33, 10, 0, (0.12, 0.68, 0.26)),
-    DemoZone("medium", 0.33, 0.66, 20, 0, (0.95, 0.62, 0.08)),
-    DemoZone("high", 0.66, 1.01, 45, 5, (0.82, 0.16, 0.12)),
-)
+COMPLEXITY_PROFILES = {
+    "low": DemoZone("low", 0.0, 1.0, 10, 0, (0.12, 0.68, 0.26)),
+    "medium": DemoZone("medium", 0.0, 1.0, 20, 0, (0.95, 0.62, 0.08)),
+    "high": DemoZone("high", 0.0, 1.0, 30, 5, (0.82, 0.16, 0.12)),
+}
 
 # Each entry is one logical scene object even when it is rendered from several
 # primitives. The totals intentionally match DemoZone.object_count.
 ZONE_OBJECT_LAYOUTS = {
     "low": ("box",) * 7 + ("tree",) * 2 + ("person",),
     "medium": ("box",) * 10 + ("tree",) * 5 + ("person",) * 5,
-    "high": ("box",) * 20 + ("tree",) * 12 + ("person",) * 8 + ("moving_person",) * 5,
+    "high": ("box",) * 12 + ("tree",) * 8 + ("person",) * 5 + ("moving_person",) * 5,
 }
 
 
@@ -300,11 +300,8 @@ def distance_to_route(x: float, y: float) -> float:
 
 
 def demo_zone_at(x: float, y: float) -> DemoZone:
-    progress = route_progress(x, y)
-    for zone in DEMO_ZONES:
-        if zone.progress_min <= progress < zone.progress_max:
-            return zone
-    return DEMO_ZONES[-1]
+    """The selected complexity is constant at every position on the route."""
+    return COMPLEXITY_PROFILES[ARGS.complexity]
 
 
 def object_footprint_radius(kind: str, size: float) -> float:
@@ -317,7 +314,7 @@ def object_footprint_radius(kind: str, size: float) -> float:
 
 
 def zoned_grid_objects(args: argparse.Namespace, seed: int, _retry: int = 0) -> list[SceneObject]:
-    """Distribute each zone's objects across five equal route-length sections.
+    """Distribute the selected complexity across five equal route-length sections.
 
     Every section receives its share of objects; failed placement raises rather
     than silently leaving an empty section. Moving-person sweep envelopes are
@@ -346,10 +343,10 @@ def zoned_grid_objects(args: argparse.Namespace, seed: int, _retry: int = 0) -> 
 
     clearance = max(1.20, float(args.corridor_half_width))
     size_ranges = {"box": (0.40, 0.72), "tree": (0.72, 0.96), "person": (0.90, 1.08)}
-    # Allow a wider placement band in the dense zone for human sweep envelopes.
-    extra_offsets = {"low": (0.55, 2.40), "medium": (0.20, 2.00), "high": (0.05, 3.80)}
+    # High-zone objects stay closer to the route than low-zone objects.
+    extra_offsets = {"low": (0.55, 2.40), "medium": (0.20, 2.00), "high": (0.05, 1.80)}
     objects = []
-    for zone in DEMO_ZONES:
+    for zone in (COMPLEXITY_PROFILES[args.complexity],):
         layout = list(ZONE_OBJECT_LAYOUTS[zone.name])
         if len(layout) != zone.object_count or layout.count("moving_person") != zone.dynamic_count:
             raise ValueError(f"Inconsistent object counts for {zone.name}")
@@ -357,11 +354,6 @@ def zoned_grid_objects(args: argparse.Namespace, seed: int, _retry: int = 0) -> 
         dynamic_kinds = [k for k in layout if k == "moving_person"]
         static_kinds = [k for k in layout if k != "moving_person"]
         rng.shuffle(static_kinds)
-        # Place larger assets first so boxes do not consume their available space.
-        static_kinds.sort(
-            key=lambda kind: object_footprint_radius(kind, sum(size_ranges[kind]) / 2),
-            reverse=True,
-        )
         section_layouts = [[] for _ in range(5)]
         for i, kind in enumerate(dynamic_kinds):
             section_layouts[i % 5].append(kind)
@@ -426,8 +418,6 @@ def choose_obstacle_count(args: argparse.Namespace, rng: random.Random) -> int:
     if args.num_obstacles is not None:
         return max(0, min(30, int(args.num_obstacles)))
     complexity = args.complexity
-    if complexity == "random":
-        complexity = rng.choice(("low", "medium", "high"))
     # Non-overlapping interpretation of the requested complexity bins.
     box_ranges = {"low": (0, 5), "medium": (6, 9), "high": (10, 15)}
     box_lo, box_hi = box_ranges[complexity]
@@ -449,7 +439,7 @@ def sample_obstacles(args: argparse.Namespace, count: int, rng: random.Random) -
             continue
         if any(math.hypot(x - o.x, y - o.y) < 0.5 * (size + o.size) + 0.65 for o in obstacles):
             continue
-        obstacles.append(SceneObject(x=x, y=y, size=size))
+        obstacles.append(SceneObject(x=x, y=y, size=size, zone=args.complexity))
 
     if len(obstacles) != count:
         raise RuntimeError(f"Could only place {len(obstacles)} of {count} obstacles.")
@@ -1171,6 +1161,11 @@ def main() -> None:
         object_count = choose_obstacle_count(ARGS, rng)
         scene_objects = sample_obstacles(ARGS, object_count, rng)
     obstacles = scene_objects
+    profile = COMPLEXITY_PROFILES[ARGS.complexity]
+    current_zone = DemoZone(
+        profile.name, 0.0, 1.0, len(scene_objects),
+        sum(item.dynamic for item in scene_objects), profile.color,
+    )
 
     stage_utils.set_stage_up_axis("Z")
     stage_utils.set_stage_units(meters_per_unit=1.0)
@@ -1192,7 +1187,7 @@ def main() -> None:
         ViewportManager.set_camera("/OmniverseKit_Persp")
         ViewportManager.set_camera_view(
             "/OmniverseKit_Persp",
-            eye=[START_XY[0] - 12.0, START_XY[1] - 12.0, 13.5],
+            eye=[START_XY[0] - 8.0, START_XY[1] - 8.0, 9.0],
             target=[0.0, 0.0, 0.0],
         )
         # The mounted camera follows the chassis and shares the ROS viewpoint.
@@ -1258,16 +1253,11 @@ def main() -> None:
     kind_summary = " ".join(
         f"{kind_labels[kind]}={count}" for kind, count in kind_counts.items()
     )
-    zone_summary = " ".join(
-        f"{zone.name}={zone.object_count}({zone.dynamic_count} dynamic)" for zone in DEMO_ZONES
-    )
     print(
-        f"[Scene] scene={ARGS.scene} objects={len(scene_objects)} {kind_summary} "
+        f"[Scene] scene={ARGS.scene} complexity={ARGS.complexity} objects={len(scene_objects)} {kind_summary} "
         f"dynamic={len(dynamic_scene_objects)} route=closed-loop control={ARGS.control_mode} "
         f"camera={ARGS.camera_width}x{ARGS.camera_height}@{ARGS.camera_fps:g}Hz"
     )
-    if ARGS.scene == "grid":
-        print(f"[Scene] zones: {zone_summary}")
     viewport_capture = start_viewport_recording(ARGS)
 
     try:
@@ -1318,7 +1308,6 @@ def main() -> None:
                         break
                 target_waypoint = ROUTE_WAYPOINTS[waypoint_index]
                 goal_distance = math.hypot(target_waypoint[0] - robot_x, target_waypoint[1] - robot_y)
-            current_zone = demo_zone_at(robot_x, robot_y)
 
             dt = 1.0 / float(ARGS.sim_hz)
             if previous_position is None or previous_heading is None:
@@ -1395,11 +1384,11 @@ def main() -> None:
             current_second = int(frame / max(ARGS.sim_hz, 1.0))
             if current_second != last_print_second:
                 last_print_second = current_second
-                if ros_interface is not None and ARGS.scene == "grid":
+                if ros_interface is not None:
                     ros_interface.publish_scene_state(current_zone)
                 if current_zone.name != previous_zone_name:
                     print(
-                        f"[Grid] ENTER {current_zone.name.upper()} zone: "
+                        f"[Scene] Fixed {current_zone.name.upper()} complexity: "
                         f"ground_truth_objects={current_zone.object_count} "
                         f"dynamic_objects={current_zone.dynamic_count}",
                         flush=True,

@@ -5,7 +5,7 @@ Battery history does not affect this expert's decisions.
 """
 import numpy as np
 
-SPEED_LEVELS = np.arange(0.5, 5.01, 0.5)
+SPEED_LEVELS = np.arange(0.5, 5.01, 0.25)
 CPU_LEVELS = [422400, 576000, 729600, 883200, 1036800, 1190400,
               1344000, 1497600, 1651200, 1804800, 1958400, 1984000]
 GPU_LEVELS = [306000000, 408000000, 510000000, 612000000, 714000000, 816000000, 918000000]

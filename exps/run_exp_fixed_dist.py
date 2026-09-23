@@ -1,21 +1,20 @@
-import yaml
+import argparse
 import time
+
 import cv2
 import numpy as np
-from pathlib import Path
-
-from robot_env import RobotEnv
-from yolo_manager import YOLOManager
-from video_player import VideoPlayer
+import yaml
 
 from controller import (
     MaxPerformanceController,
     AdaptiveController,
     LongTermBatteryAwareController,
     PEOController,
-    # SynchronousMultiScaleController,
-    MultiScaleController
+    MultiScaleController,
 )
+from robot_env import RobotEnv
+from video_player import VideoPlayer
+from yolo_manager import YOLOManager
 
 
 # ==========================================
@@ -42,67 +41,103 @@ controllers = {
     "OURS": MultiScaleController
 }
 
-MISSION_DISTANCE = 500.0      # meters
-SOH_LIST = [100]
 
-summary_log = open("logs/results_fixed_distance.log", "a")
-summary_log.write("\n=============================================\n")
-summary_log.write(f"Experiment started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-summary_log.write("=============================================\n")
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run AsyncMEC experiments at a fixed mission distance.")
+    parser.add_argument("--distance", type=float, default=500.0, help="Mission distance in meters.")
+    parser.add_argument(
+        "--complexity",
+        choices=["low", "medium", "high"],
+        default="low",
+        help="Scene complexity used for the evaluation workload.",
+    )
+    parser.add_argument("--soh", type=float, default=100.0, help="Initial battery SOH in percent.")
+    parser.add_argument(
+        "--source-type",
+        choices=["video", "camera"],
+        default="video",
+        help="Input source: a recorded video file or a live camera.",
+    )
+    parser.add_argument(
+        "--video-file",
+        default="videos/person_bicycle_car_detection.mp4",
+        help="Path to the input video file when using --source-type video.",
+    )
+    parser.add_argument(
+        "--camera-index",
+        type=int,
+        default=0,
+        help="Camera device index when using --source-type camera.",
+    )
+    return parser.parse_args()
 
 
-# ==========================================
-# Run experiments
-# ==========================================
+def read_source_frame(source_type, source, cap=None, speed=1.0, control_period=1.0):
+    if source_type == "video":
+        return source.get_frame(speed=speed, control_period=control_period)
+    if source_type == "camera":
+        ok, frame = cap.read()
+        if not ok or frame is None:
+            raise RuntimeError("Failed to read a frame from the camera source.")
+        return frame
+    raise ValueError(f"Unsupported source type: {source_type}")
 
-for controller_name, ControllerClass in controllers.items():
 
-    print("\n================================================")
-    print(f"Running {controller_name}")
-    print("================================================")
+def main():
+    args = parse_args()
 
-    for soh in SOH_LIST:
+    complexity_map = {
+        "low": 2,
+        "medium": 6,
+        "high": 10,
+    }
+    frame_size_map = {
+        "low": 416,
+        "medium": 640,
+        "high": 960,
+    }
 
-        print(f"\n========== SOH = {soh}% ==========")
+    mission_distance = args.distance
+    soh_list = [args.soh]
 
-        # ==========================================
-        # Mission loop
-        # ==========================================
-        test_videos = [
-            {
-                "name": "low",
-                "path": "videos/person_bicycle_car_detection.mp4",
-                "frame_size": 416,
-                "target_fps": 30,
-                "complexity": 2
-            },
-            # {
-            #     "name": "medium",
-            #     "path": "videos/fruit_and_vegetable_detection.mp4.mp4",
-            #     "frame_size": 640,
-            #     "target_fps": 30,
-            #     "complexity": 6
-            # },
-            # {
-            #     "name": "high",
-            #     "path": "videos/person_bicycle_car_detection.mp4",
-            #     "frame_size": 960,
-            #     "target_fps": 30,
-            #     "complexity": 10
-            # }
-        ]
+    summary_log = open("logs/results_fixed_distance.log", "a")
+    summary_log.write("\n=============================================\n")
+    summary_log.write(f"Experiment started: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    summary_log.write(f"Distance={mission_distance} m | Complexity={args.complexity} | Source={args.source_type}\n")
+    summary_log.write("=============================================\n")
 
-        for workload in test_videos:
+    workload = {
+        "name": args.complexity,
+        "path": args.video_file if args.source_type == "video" else None,
+        "frame_size": frame_size_map[args.complexity],
+        "target_fps": 30,
+        "complexity": complexity_map[args.complexity],
+    }
+
+    if args.source_type == "camera":
+        cap = cv2.VideoCapture(args.camera_index)
+        if not cap.isOpened():
+            raise RuntimeError(f"Cannot open camera index {args.camera_index}.")
+    else:
+        cap = None
+
+    for controller_name, ControllerClass in controllers.items():
+        print("\n================================================")
+        print(f"Running {controller_name}")
+        print("================================================")
+
+        for soh in soh_list:
+            print(f"\n========== SOH = {soh}% ==========")
 
             robot = RobotEnv(robot_config, is_sim=False)
             robot.battery.set_initial_soh(soh)
 
             controller = ControllerClass(robot)
-
             yolo = YOLOManager(
                 is_sim=False,
                 robot=robot,
-                model_path="./checkpoints/yolov8n.pt")
+                model_path="./checkpoints/yolov8n.pt",
+            )
             yolo.set_enabled(True)
 
             global_time = 0.0
@@ -111,73 +146,60 @@ for controller_name, ControllerClass in controllers.items():
             total_energy = 0.0
             total_steps = 0
             last_speed = 1.0
-            final_soh=0.0
 
             yolo_data = {
                 "fps": 0,
                 "target_fps": workload["target_fps"],
                 "object_count": 0,
-                "complexity_id": 1.0
+                "complexity_id": 1.0,
             }
-            print(f"\nRunning workload: {workload['name']}")
+            print(f"\nRunning workload: {workload['name']} ({args.source_type})")
 
-            player = VideoPlayer(workload["path"], reference_speed=1.0)
+            if args.source_type == "video":
+                player = VideoPlayer(workload["path"], reference_speed=1.0)
+                frame_source = player
+            else:
+                frame_source = None
             yolo.set_scene_complexity(workload["complexity"])
-
             step_times = []
 
-            while distance < MISSION_DISTANCE:
-                
-                frame = player.get_frame(speed=last_speed, control_period=control_period)
-                
-                # ==================================
-                # Controller
-                # ==================================
+            while distance < mission_distance:
+                frame = read_source_frame(
+                    args.source_type,
+                    frame_source,
+                    cap=cap,
+                    speed=last_speed,
+                    control_period=control_period,
+                )
+
                 start = time.perf_counter()
                 action = controller.step(yolo_data)
                 last_speed = action["speed"]
                 step_times.append(time.perf_counter() - start)
 
-                # ==================================
-                # Robot update
-                # ==================================
-                robot_state = robot.step(
-                    action,
-                    control_period
-                )
+                robot_state = robot.step(action, control_period)
 
-                # ==================================
-                # YOLO workload
-                # ==================================
                 yolo_data = yolo.run(
                     action["cpu_freq"],
                     action["gpu_freq"],
                     input_data=frame,
-                    frame_size=workload["frame_size"]
+                    frame_size=workload["frame_size"],
                 )
                 if yolo_data["fps"] >= workload["target_fps"]:
                     qos_count += 1
+
                 print(
                     f"FPS={yolo_data['fps']:.2f} "
                     f"Latency={yolo_data['latency_ms']:.2f} ms "
                     f"Objects={yolo_data['object_count']}"
                 )
 
-                # ==================================
-                # Derived metrics
-                # ==================================
                 p_comp = robot_state["p_comp"]
                 p_mech = robot_state["p_mech"]
                 print(f"Mech power: {p_mech}, Comp power: {p_comp}")
                 p_total = p_comp + p_mech
                 total_energy += p_total * control_period
-
-                current = robot_state["battery"]["current"]
                 distance += action["speed"] * control_period
-
-                # ==================================
-                # Console
-                # ==================================
 
                 print(
                     f"[{global_time:5.1f}s] "
@@ -223,9 +245,15 @@ for controller_name, ControllerClass in controllers.items():
             )
             summary_log.flush()
 
-        player.release()
-        print(f"\nFinished {controller_name}, SOH: {soh}")
-        
+            if args.source_type == "video":
+                frame_source.release()
+            else:
+                cap.release()
+            print(f"\nFinished {controller_name}, SOH: {soh}")
 
-print("\nAll Experiments Finished")
-summary_log.close()
+    print("\nAll Experiments Finished")
+    summary_log.close()
+
+
+if __name__ == "__main__":
+    main()

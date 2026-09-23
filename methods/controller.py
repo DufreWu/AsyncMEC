@@ -164,7 +164,7 @@ class LongTermBatteryAwareController:
 
         return health
 
-    def step(self, yolo_data):
+    def step(self, state):
         battery_state = self.robot.battery.read()
 
         avg_cpu_idx = len(self.cpu_freqs) // 2
@@ -196,23 +196,6 @@ class LongTermBatteryAwareController:
             }
 
         return self.action
-
-class RRLController(RuntimeController):
-    def __init__(
-        self,
-        robot: RobotEnv,
-        device="cpu"
-    ):
-        self.device = device
-        if __package__:
-            from .rl_control import DQNController
-        else:
-            from rl_control import DQNController
-        self.model = DQNController(robot)
-        self.model.agent.load(str(MULTI_SCALE_ROOT / "checkpoints/rrl_model.pt"))
-    
-    def step(self, yolo_data):
-        return self.model.step(yolo_data)
 
 class MultiScaleController(RuntimeController):
 
@@ -252,7 +235,7 @@ class MultiScaleController(RuntimeController):
     # ========================================================
     # Runtime step
     # ========================================================
-    def step(self, yolo_data):
+    def step(self, state):
         import numpy as np
         import torch
 
@@ -264,9 +247,9 @@ class MultiScaleController(RuntimeController):
                 self.robot.get_mechanical_power() / self.robot.max_mech_power,
                 self.robot.get_computational_power() / self.robot.max_comp_power,
                 self.robot.get_speed() / self.robot.motor.max_speed,
-                yolo_data["fps"] / 45,
-                yolo_data["target_fps"] / 45,
-                yolo_data["complexity_id"]
+                state["fps"] / 45,
+                state["target_fps"] / 45,
+                state["complexity_id"]
             ]],
             dtype=torch.float32,
             device=self.device
@@ -354,11 +337,11 @@ if __name__ == "__main__":
         print(name)
         print("=" * 60)
 
-        yolo_data = {
+        state = {
             "fps": 15,
             "target_fps": 30
         }
-        action = controller.step(yolo_data)
+        action = controller.step(state)
         print(f"Controller output: {action}")
         print(f"Mechanical Power : {robot.get_mechanical_power():.2f} W")
         print(f"Compute Power    : {robot.get_computational_power():.2f} W")

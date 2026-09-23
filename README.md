@@ -49,12 +49,14 @@ See [battery_feature/README.md]
 
 ### Prepare the Data
 
+Run these commands from the AsyncMEC repository root:
+
 ```bash
-python data_prep.py \
-  --nasa-data-dir "../../data/nasa/11. Randomized Battery Usage Data Set" \
-  --data-dir ../../data/nasa \
+python battery_feature/scripts/nasa/data_prep.py \
+  --nasa-data-dir "./battery_feature/data/nasa/11. Randomized Battery Usage Data Set" \
+  --data-dir ./battery_feature/data/nasa \
   --normalized-time-step 1 \
-  --window-length 2048 \
+  --window-length 60 \
   --window-overlap 0 \
   --nj 8
 ```
@@ -62,9 +64,9 @@ python data_prep.py \
 ### Pretrain the Feature Encoder
 
 ```bash
-python train_ae.py \
-  --out-dir ../../exps/test/ae \
-  --data-dir ../../data/nasa \
+python battery_feature/scripts/nasa/train_ae.py \
+  --out-dir ./battery_feature/exps/test/ae \
+  --data-dir ./battery_feature/data/nasa \
   --train-cells RW13,RW14,RW15,RW16 \
   --valid-cells RW17 \
   --window-length 60 \

@@ -53,7 +53,7 @@ Run these commands from the AsyncMEC repository root:
 
 ```bash
 python battery_feature/scripts/nasa/data_prep.py \
-  --nasa-data-dir "./battery_feature/data/nasa/11. Randomized Battery Usage Data Set" \
+  --nasa-data-dir "./battery_feature/data/nasa/randomized_battery_usage_dataset \
   --data-dir ./battery_feature/data/nasa \
   --normalized-time-step 1 \
   --window-length 60 \

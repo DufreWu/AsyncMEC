@@ -10,19 +10,57 @@ import argparse
 import json
 import math
 from pathlib import Path
+import pickle
 import random
 import sys
 
 import numpy as np
+import onnxruntime as ort
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, TensorDataset, Subset
 
 ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT.parent) not in sys.path:
-    sys.path.insert(0, str(ROOT.parent))
-from multi_scale.methods.multi_scale_control import EnergyEfficientMultiScaleController
-from multi_scale.train.generate_dataset import encode_health
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+try:
+    from methods.multi_scale_control import EnergyEfficientMultiScaleController
+except ImportError:  # pragma: no cover
+    from multi_scale.methods.multi_scale_control import EnergyEfficientMultiScaleController
+
+
+def encode_health(history, cfg):
+    """Encode raw battery telemetry into the 32-dimensional health feature used by the controller.
+
+    This matches the preprocessing used by BatteryMonitor in envs/robot_env.py.
+    """
+    history = np.asarray(history, dtype=np.float32)
+    if history.ndim != 3:
+        raise ValueError('Battery history must have shape (N, window, features)')
+    if history.shape[1:] != (cfg['battery']['window_size'], 3):
+        raise ValueError(f'Expected battery history shape (N, {cfg["battery"]["window_size"]}, 3); got {history.shape}')
+
+    enc_path = Path(cfg['battery']['encoder_path'])
+    if not enc_path.is_absolute():
+        enc_path = (ROOT / enc_path).resolve()
+    session = ort.InferenceSession(str(enc_path), providers=['CPUExecutionProvider'])
+    input_name = session.get_inputs()[0].name
+
+    scaled = history.copy()
+    for channel_idx, scaler_name in enumerate(('encoder_x0_scaler', 'encoder_x1_scaler', 'encoder_x2_scaler')):
+        scaler_path = Path(cfg['battery'][scaler_name])
+        if not scaler_path.is_absolute():
+            scaler_path = (ROOT / scaler_path).resolve()
+        with scaler_path.open('rb') as fh:
+            scaler = pickle.load(fh)
+        scaled[:, :, channel_idx] = scaler.transform(scaled[:, :, channel_idx])
+
+    encoded = session.run(None, {input_name: scaled.astype(np.float32)})[0]
+    encoded = np.asarray(encoded, dtype=np.float32)
+    if encoded.shape[1] != 32:
+        raise ValueError(f'Expected 32-dim health feature, but got shape {encoded.shape}')
+    return encoded
 
 # Must match methods/controller.py:MultiScaleController for direct deployment.
 MODEL_CONFIG = dict(state_dim=6, adapter_dim=32, hidden_dim=32,
@@ -101,17 +139,19 @@ def run_epoch(model, loader, device, cfg, optimizer=None, grad_clip=1.0):
 
 def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--dataset', type=Path, default=ROOT/'data/expert_dataset.npz')
-    p.add_argument('--output-dir', type=Path, default=ROOT/'checkpoints/msc_training')
-    p.add_argument('--epochs', type=int, default=100)
-    p.add_argument('--batch-size', type=int, default=128)
-    p.add_argument('--lr', type=float, default=1e-4)
-    p.add_argument('--weight-decay', type=float, default=1e-5)
-    p.add_argument('--val-fraction', type=float, default=0.2)
+    p.add_argument('--dataset', type=Path, default=ROOT/'train'/'dataset'/'expert_dataset.npz',
+                   help='Path to the training dataset NPZ file.')
+    p.add_argument('--output-dir', type=Path, default=ROOT/'checkpoints'/'msc_training',
+                   help='Directory where checkpoints and logs are written.')
+    p.add_argument('--epochs', type=int, default=100, help='Number of training epochs.')
+    p.add_argument('--batch-size', type=int, default=128, help='Mini-batch size.')
+    p.add_argument('--lr', type=float, default=1e-4, help='Learning rate.')
+    p.add_argument('--weight-decay', type=float, default=1e-5, help='Weight decay.')
+    p.add_argument('--val-fraction', type=float, default=0.2, help='Validation split fraction.')
     p.add_argument('--patience', type=int, default=15, help='Early stopping epochs; 0 disables.')
-    p.add_argument('--grad-clip', type=float, default=1)
-    p.add_argument('--seed', type=int, default=7)
-    p.add_argument('--threads', type=int, default=1)
+    p.add_argument('--grad-clip', type=float, default=1, help='Gradient-norm clipping value.')
+    p.add_argument('--seed', type=int, default=7, help='Random seed.')
+    p.add_argument('--threads', type=int, default=1, help='PyTorch CPU thread count.')
     p.add_argument('--device', default='cpu', help='cpu, cuda, or cuda:N')
     args = p.parse_args(argv)
     for key in ('epochs', 'batch_size', 'threads', 'lr', 'grad_clip'):

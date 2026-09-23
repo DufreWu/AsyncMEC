@@ -41,26 +41,67 @@ The ROS 2 + Isaac Sim environment is organized under [ros2_isaacsim_env/README.m
 
 # Datasets and Training Data
 
-## Battery condition feature pretraining data
+##  Battery-Condition Feature Pretraining
 Battery models are trained using NASA battery datasets.
 Dataset link: [NASA Li-ion Battery Aging Datasets](https://data.nasa.gov/dataset/li-ion-battery-aging-datasets)
 
-## Controller training pipeline
+See [battery_feature/README.md]
+
+### Prepare the Data
+
+```bash
+python data_prep.py \
+  --nasa-data-dir "../../data/nasa/11. Randomized Battery Usage Data Set" \
+  --data-dir ../../data/nasa \
+  --normalized-time-step 1 \
+  --window-length 2048 \
+  --window-overlap 0 \
+  --nj 8
+```
+
+### Pretrain the Feature Encoder
+
+```bash
+python train_ae.py \
+  --out-dir ../../exps/test/ae \
+  --data-dir ../../data/nasa \
+  --train-cells RW13,RW14,RW15,RW16 \
+  --valid-cells RW17 \
+  --window-length 60 \
+  --window-step 50 \
+  --latent-size 32 \
+  --epochs 200 \
+  --lr 0.0001 \
+  --nj 8
+```
+
+## Controller Training Pipeline
+
 Controller training data are generated through the following steps:
 
-1. Profile computational workloads across CPU and GPU frequency settings on the Jetson Orin NX.
-2. Build energy models to estimate computational and mechanical power consumption under different operating conditions.
-3. Evaluate candidate control decisions using the resulting models and generate labels for controller training.
+1. **Hardware profiling:** Measure application performance and power consumption across CPU and GPU frequency settings on the Jetson Orin NX.
+2. **Model construction:** Build models to estimate application performance and computational and mechanical power consumption under different operating conditions.
+3. **Label generation:** Evaluate candidate combinations of CPU frequency, GPU frequency, and motion speed using these models to generate control-action labels.
 
-# Checkpoints
+Train the controller from the repository root:
+
+```bash
+python train/train_msc.py \
+  --dataset train/dataset/expert_dataset.npz \
+  --output-dir checkpoints/msc_control \
+  --epochs 200 \
+  --batch-size 64
+```
+
+# Pretrained Checkpoints
 
 Pretrained model checkpoints are not included in this repository during the anonymous review process. They will be released after paper acceptance.
 
 Included checkpoints target:
 
 - Application models ([YOLOv8](https://yolov8.com/) and [SegFormer](https://github.com/NVlabs/SegFormer)).
-- Battery feature extractor.
-- Controller model.
+- Battery feature.
+- Controller.
 
 # Acknowledgments
 

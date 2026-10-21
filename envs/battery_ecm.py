@@ -1,7 +1,23 @@
 """Battery-aware simulation: state-dependent 2RC ECM, standard library only.
 
-Run demo: python battery_ecm_v2.py --capacity-ah 5 --nominal-voltage 14.8
-Tests:    python battery_ecm_v2.py --self-test
+All five ECM elements (R0, R1, R2, C1, C2) have independent, explicit
+functions of SOC, SOH, and cell/pack temperature. No measured impedance,
+HPPC, OCV or aging calibration is claimed: coefficient values are illustrative.
+Only discharge (nonnegative constant terminal power) is supported.
+
+At each electrical substep, the RC time constants are recomputed as
+    tau1 = R1(SOC, SOH, T) * C1(SOC, SOH, T)
+    tau2 = R2(SOC, SOH, T) * C2(SOC, SOH, T)
+
+Reference state for ECM component values: SOC=0.5, SOH=1, T=25 C.
+
+Default pack: Blue Robotics Lithium-ion Battery (4S6P, 18 Ah, 14.8 V,
+266.4 Wh nominal energy, 12 V minimum safe voltage).
+https://bluerobotics.com/store/comm-control-power/powersupplies-batteries/battery-li-4s-18ah-r3/
+Pack ratings do not calibrate the assumed OCV, resistance, RC or aging curves.
+
+Run demo: python envs/battery_ecm.py --capacity-ah 18 --nominal-voltage 14.8
+Tests:    python envs/battery_ecm.py --self-test
 Reference for ECM structure only (NOT default numerical calibration):
 https://www.mathworks.com/help/simscape-battery/ref/batteryequivalentcircuit.html
 """
@@ -40,7 +56,7 @@ class ECMParameters:
 
 
 class Battery2RCECM:
-    def __init__(self, capacity_ah, nominal_voltage, soc_init=1.0,
+    def __init__(self, capacity_ah=18.0, nominal_voltage=14.8, soc_init=1.0,
                  soh_init=1.0, temp_c=25.0, *, aging=True,
                  cycles_to_80=1000.0, resistance_growth=3.0,
                  rate_stress=0.2, r0_ref=0.035, r1_ref=0.010,
@@ -62,6 +78,7 @@ class Battery2RCECM:
         self.r2_ref = positive('r2_ref', r2_ref)
         self.tau1_ref = positive('tau1_ref', tau1_ref)
         self.tau2_ref = positive('tau2_ref', tau2_ref)
+        # Resistance references retain their assumed 5 Ah / 14.8 V baseline.
         self.resistance_scale = positive('resistance_scale',
             (self.nominal_voltage/14.8)*(5/self.capacity_ah)
             if resistance_scale is None else resistance_scale)
@@ -278,9 +295,9 @@ def self_test():
 
 def main():
     parser = argparse.ArgumentParser(description='Uncalibrated 2RC battery simulation')
-    parser.add_argument('--capacity-ah',type=float,default=5)
+    parser.add_argument('--capacity-ah',type=float,default=18.0)
     parser.add_argument('--nominal-voltage',type=float,default=14.8)
-    parser.add_argument('--soh-init',type=float,default=.85)
+    parser.add_argument('--soh-init',type=float,default=0.85)
     parser.add_argument('--power-w',type=float,default=30)
     parser.add_argument('--power-demand-w',nargs='*',type=float,default=None,
                         help='Optional list of constant power demands in W to estimate energy for. '
@@ -317,12 +334,4 @@ def main():
 
 
 if __name__=='__main__':
-    # main()
-
-    battery_model = Battery2RCECM(5, 14.8)
-    loss = battery_model.energy_loss(0.2, 25, duration_s=1)
-
-    print(loss["soc"])
-    print(loss["power_w"])
-    print(loss["energy_loss_j"])
-    print(loss["energy_loss_wh"])
+    main()
